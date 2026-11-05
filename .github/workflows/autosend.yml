@@ -35,7 +35,7 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: 22
-      - name: Restore state (conversation ids, delays, outcomes: no customer text)
+      - name: Restore state (conversation ids, delays and outcomes, no customer text)
         uses: actions/cache/restore@v5
         with:
           path: .state
