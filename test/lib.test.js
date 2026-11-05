@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { evaluate, judgeDraft, complaintRegex, parseKinds, sha, romeParts } from '../src/lib.js';
 
 const WORDS = 'refund,sue,cancel my order,rip off,truffa,fuck'.split(',');
-const cfg = { complaintRe: complaintRegex(WORDS), maxAgeMs: 24 * 3600_000, ignoreDelay: false, maxAutoReplies: 5 };
+const cfg = { complaintRe: complaintRegex(WORDS), maxAgeMs: 24 * 3600_000, ignoreDelay: false, maxAutoReplies: 15 };
 const T0 = Date.parse('2026-11-05T10:00:00Z');
 const at = (min) => new Date(T0 + min * 60_000).toISOString();
 const inc = (id, min, content = 'hello') => ({ id, message_type: 'incoming', private: false, content, created_at: at(min) });
@@ -27,9 +27,9 @@ test('complaint words: whole word, case-insensitive, phrases, other languages', 
   for (const c of ['I want a REFUND now', 'please cancel my order', 'it is a Truffa!', 'what the fuck', 'this is a rip   off', 'Ask Sue']) assert.equal(run([inc(1, 0, c)]).reason, 'complaint-word', c);
   for (const c of ['refunded?', 'issue with my pursue', 'thanks']) assert.notEqual(run([inc(1, 0, c)]).reason, 'complaint-word', c);
 });
-test('three customer messages in a row go to a human', () => {
-  assert.equal(run([inc(1, 0), inc(2, 1), inc(3, 2)]).reason, 'three-in-a-row');
-  assert.equal(run([inc(1, 0), out(2, 1), inc(3, 2), inc(4, 3)]).action, 'check-draft');
+test('several customer messages in a row are no longer a reason to hand over', () => {
+  assert.equal(run([inc(1, 0), inc(2, 1), inc(3, 2)]).action, 'check-draft');
+  assert.equal(run([inc(1, 0), out(2, 1), inc(3, 2), inc(4, 3), inc(5, 4), inc(6, 5)]).action, 'check-draft');
 });
 test('ai-handover label goes to a human', () => assert.equal(run([inc(1, 0)], { conv: { labels: ['ai-handover-billing'] } }).reason, 'ai-handover'));
 test('customer messages older than the max age are left alone', () => assert.equal(run([inc(1, 0)], { nowMin: 25 * 60 }).reason, 'too-old'));
@@ -52,18 +52,14 @@ test('new cycle: the complaint-word check also covers the new message', () => {
   assert.equal(run(msgs, { st: afterReply(), nowMin: 31 }).action, 'new-cycle');             // the check runs after the delay, like for a first message
   assert.deepEqual([run(msgs, { st: reset(), nowMin: 50 }).action, run(msgs, { st: reset(), nowMin: 50 }).reason], ['handoff', 'complaint-word']);
 });
-test('new cycle: three customer messages in a row without a reply still go to a human', () => {
-  const msgs = [inc(1, 0), out(2, 12), inc(3, 30), inc(4, 31), inc(5, 32)];
-  assert.equal(run(msgs, { st: reset(), nowMin: 60 }).reason, 'three-in-a-row');
-});
 test('new cycle: a human reply to the new message skips, a too-old message is left alone', () => {
   assert.equal(run([...thread, out(4, 35)], { st: afterReply(), nowMin: 40 }).reason, 'human-replied');
   assert.equal(run(thread, { st: afterReply(), nowMin: 30 + 25 * 60 }).reason, 'too-old');
 });
 test('auto-reply limit: the next customer message after N auto-replies goes to a human', () => {
-  const r = run(thread, { st: afterReply({ autoReplies: 5 }), nowMin: 31 });
+  const r = run(thread, { st: afterReply({ autoReplies: 15 }), nowMin: 31 });
   assert.deepEqual([r.action, r.reason], ['handoff', 'auto-reply-limit']);
-  assert.equal(run(thread, { st: afterReply({ autoReplies: 4 }), nowMin: 31 }).action, 'new-cycle');
+  assert.equal(run(thread, { st: afterReply({ autoReplies: 14 }), nowMin: 31 }).action, 'new-cycle');
 });
 test('auto-reply limit is configurable and old state without a counter counts as one reply', () => {
   assert.equal(run(thread, { st: afterReply({ autoReplies: 2 }), cfg: { maxAutoReplies: 2 }, nowMin: 31 }).reason, 'auto-reply-limit');
@@ -71,7 +67,7 @@ test('auto-reply limit is configurable and old state without a counter counts as
   assert.equal(run(thread, { st: afterReply({ autoReplies: undefined }), cfg: { maxAutoReplies: 1 }, nowMin: 31 }).reason, 'auto-reply-limit');
 });
 test('auto-reply limit does not hand over a message a human already answered', () => {
-  assert.equal(run([...thread, out(4, 35)], { st: afterReply({ autoReplies: 5 }), nowMin: 40 }).reason, 'human-replied');
+  assert.equal(run([...thread, out(4, 35)], { st: afterReply({ autoReplies: 15 }), nowMin: 40 }).reason, 'human-replied');
 });
 test('a conversation already handed to a human stays with them', () => {
   const r = run(thread, { st: { msgId: 1, outcome: 'handed', done: true }, nowMin: 31 });
@@ -103,7 +99,7 @@ test('human joined: a message we did not send after our auto-reply hands over, e
   assert.deepEqual([r.action, r.reason, r.lastIn.id], ['handoff', 'human-joined', 4]);
 });
 test('human joined takes priority over the auto-reply limit; a human message BEFORE our auto-reply does not count', () => {
-  assert.equal(run(withHuman, { st: ours({ autoReplies: 5 }), nowMin: 31 }).reason, 'human-joined');
+  assert.equal(run(withHuman, { st: ours({ autoReplies: 15 }), nowMin: 31 }).reason, 'human-joined');
   const early = [inc(1, 0), out(2, 5, 'a human wrote this'), out(3, 12, 'AUTO'), inc(4, 30)];
   assert.equal(run(early, { st: ours(), nowMin: 31 }).action, 'new-cycle');
 });
@@ -117,4 +113,22 @@ test('human joined: old state with one sentHash still recognises our message; wi
 });
 test('human joined: a handoff is only for a new message after our auto-reply (a first message is unaffected)', () => {
   assert.equal(run([inc(1, 0)], { nowMin: 13 }).action, 'check-draft');
+});
+
+test('the same customer writes 4 times and gets 4 automatic replies (default cap is 15)', () => {
+  const draftText = (n) => `AUTO-${n}`;
+  let st, msgs = [], clock = 0, replies = 0, id = 0;
+  for (let n = 1; n <= 4; n++) {
+    clock += 60; msgs.push(inc(++id, clock));
+    let ev = evaluate({ conv: { id: 1, labels: [] }, msgs, st, now: T0 + (clock + 1) * 60_000, delayMin: 12, cfg: { ...cfg, maxAutoReplies: undefined } });
+    if (ev.action === 'new-cycle') { st.outcome = undefined; st.done = false; ev = evaluate({ conv: { id: 1, labels: [] }, msgs, st, now: T0 + (clock + 1) * 60_000, delayMin: 12, cfg: { ...cfg, maxAutoReplies: undefined } }); }
+    assert.equal(ev.action, 'wait', `message ${n}`);
+    clock += 13;
+    ev = evaluate({ conv: { id: 1, labels: [] }, msgs, st, now: T0 + (clock + 1) * 60_000, delayMin: 12, cfg: { ...cfg, maxAutoReplies: undefined } });
+    assert.equal(ev.action, 'check-draft', `message ${n}`);
+    assert.equal(judgeDraft({ content: draftText(n), source: 'ai', updated_at: at(clock) }, ev.lastIn).action, 'send');
+    msgs.push(out(++id, clock, draftText(n))); replies++;
+    st = { msgId: ev.lastIn.id, outcome: 'sent', done: true, autoReplies: replies, sentHash: sha(draftText(n)), sentHashes: [sha(draftText(n))] };
+  }
+  assert.equal(replies, 4);
 });

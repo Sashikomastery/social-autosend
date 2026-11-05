@@ -20,9 +20,9 @@ const cfg = {
   complaintRe: complaintRegex(parseList(env.COMPLAINT_WORDS)),
   maxAgeMs: Number((MANUAL && DRY && env.MAX_AGE_HOURS_DRY) || env.MAX_AGE_HOURS || 24) * 3600_000,   // the dry-run override never applies to real sending         // older customer messages are left to the humans
   ignoreDelay: MANUAL && DRY && env.IGNORE_DELAY === 'true',
-  maxAutoReplies: Number.isInteger(Number(env.MAX_AUTO_REPLIES)) && Number(env.MAX_AUTO_REPLIES) >= 1 ? Number(env.MAX_AUTO_REPLIES) : 5,   // auto-replies per conversation, then a human takes over
+  maxAutoReplies: Number.isInteger(Number(env.MAX_AUTO_REPLIES)) && Number(env.MAX_AUTO_REPLIES) >= 1 ? Number(env.MAX_AUTO_REPLIES) : 15,   // auto-replies per conversation, then a human takes over
 };
-if (env.MAX_AUTO_REPLIES && cfg.maxAutoReplies === 5 && env.MAX_AUTO_REPLIES.trim() !== '5') console.log('MAX_AUTO_REPLIES is not a whole number of 1 or more: using 5');
+if (env.MAX_AUTO_REPLIES && cfg.maxAutoReplies === 15 && env.MAX_AUTO_REPLIES.trim() !== '15') console.log('MAX_AUTO_REPLIES is not a whole number of 1 or more: using 15');
 const now = Date.now();
 const state = loadState();
 const cl = makeClient(env.COMMSLAYER_TOKEN_SOCIAL, { maxCalls: Number(env.MAX_CALLS || 60) });

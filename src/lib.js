@@ -61,7 +61,7 @@ export function evaluate({ conv, msgs, st, now, delayMin, cfg }) {
   if (newCycle) {
     const joined = humanJoined(real, lastIn, st);
     if (joined) return { action: 'handoff', reason: 'human-joined', lastIn, senders: joined };   // a person wrote in this conversation after our auto-reply: no new AI draft
-    if ((st.autoReplies ?? 1) >= (cfg.maxAutoReplies ?? 5)) return { action: 'handoff', reason: 'auto-reply-limit', lastIn };   // state from before the counter: a sent conversation had at least 1
+    if ((st.autoReplies ?? 1) >= (cfg.maxAutoReplies ?? 15)) return { action: 'handoff', reason: 'auto-reply-limit', lastIn };   // state from before the counter: a sent conversation had at least 1
     return { action: 'new-cycle', lastIn };
   }
   const dueAt = inAt + delayMin * 60_000;
@@ -69,8 +69,6 @@ export function evaluate({ conv, msgs, st, now, delayMin, cfg }) {
 
   if ((conv.labels || []).some((l) => /^ai-handover/i.test(l))) return { action: 'handoff', reason: 'ai-handover', lastIn };
   if (incoming.some((m) => cfg.complaintRe.test(m.content || ''))) return { action: 'handoff', reason: 'complaint-word', lastIn };
-  const lastOut = real.map((m) => m.message_type).lastIndexOf('outgoing');
-  if (real.slice(lastOut + 1).filter((m) => m.message_type === 'incoming').length >= 3) return { action: 'handoff', reason: 'three-in-a-row', lastIn };
   return { action: 'check-draft', lastIn };
 }
 
