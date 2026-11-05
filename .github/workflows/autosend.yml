@@ -14,6 +14,10 @@ on:
         description: "Dry run only: also show conversations that are still inside the 10-15 min delay"
         type: boolean
         default: false
+      max_age_hours:
+        description: "Dry run only: treat customer messages up to this many hours old as in scope (the real limit stays MAX_AGE_HOURS)"
+        type: string
+        default: ""
       probe_conversation_id:
         description: "Optional: id of a TEST conversation, to check that Commslayer accepts the custom attributes auto_sent / needs_human (this writes to that conversation)"
         type: string
@@ -53,6 +57,8 @@ jobs:
           SEND_ENABLED: ${{ vars.SEND_ENABLED }}
           DRY_RUN: ${{ inputs.dry_run }}
           IGNORE_DELAY: ${{ inputs.ignore_delay }}
+          MAX_AGE_HOURS_DRY: ${{ inputs.max_age_hours }}
+          MAX_AGE_HOURS: ${{ vars.MAX_AGE_HOURS }}
           PROBE_CONVERSATION_ID: ${{ inputs.probe_conversation_id }}
         run: node src/run.js
       - name: Save state

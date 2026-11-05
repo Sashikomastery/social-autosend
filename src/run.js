@@ -18,7 +18,7 @@ if (missing.length) { console.error(`missing settings: ${missing.join(', ')}`); 
 const INBOXES = parseIds(env.INBOX_IDS), KINDS = parseKinds(env.INBOX_KINDS), CHAIN = parseIds(env.AGENT_CHAIN);
 const cfg = {
   complaintRe: complaintRegex(parseList(env.COMPLAINT_WORDS)),
-  maxAgeMs: Number(env.MAX_AGE_HOURS || 24) * 3600_000,         // older customer messages are left to the humans
+  maxAgeMs: Number((MANUAL && DRY && env.MAX_AGE_HOURS_DRY) || env.MAX_AGE_HOURS || 24) * 3600_000,   // the dry-run override never applies to real sending         // older customer messages are left to the humans
   ignoreDelay: MANUAL && DRY && env.IGNORE_DELAY === 'true',
 };
 const now = Date.now();
