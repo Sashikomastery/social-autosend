@@ -24,7 +24,7 @@ const t = (m) => Date.parse(m.created_at);
 const byTime = (a, b) => t(a) - t(b) || a.id - b.id;
 
 // First pass. Returns { action: skip | wait | complete | handoff | check-draft, reason, lastIn, ... }.
-//   st = state entry for this conversation (or undefined), delayMin = its random delay (10-15 min), saved once per conversation.
+//   st = state entry for this conversation (or undefined), delayMin = its random delay (10-27 min), saved once per conversation.
 export function evaluate({ conv, msgs, st, now, delayMin, cfg }) {
   const real = msgs.filter((m) => !m.private && (m.message_type === 'incoming' || m.message_type === 'outgoing')).sort(byTime);
   const incoming = real.filter((m) => m.message_type === 'incoming');

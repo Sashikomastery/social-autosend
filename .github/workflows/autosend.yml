@@ -11,7 +11,7 @@ on:
         type: boolean
         default: true
       ignore_delay:
-        description: "Dry run only: also show conversations that are still inside the 10-15 min delay"
+        description: "Dry run only: also show conversations that are still inside the 10-27 min delay"
         type: boolean
         default: false
       max_age_hours:

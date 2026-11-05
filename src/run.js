@@ -1,4 +1,4 @@
-// social-autosend: sends the AI draft of Facebook comments / Messenger DMs 10-15 minutes after the customer wrote, then resolves.
+// social-autosend: sends the AI draft of Facebook comments / Messenger DMs 10-27 minutes after the customer wrote, then resolves.
 // Logs contain conversation ids and short codes only. Never message texts, names or tokens.
 import { makeClient, ApiError, BudgetError } from './commslayer.js';
 import { sendSlack } from './slack.js';
@@ -111,7 +111,7 @@ async function processConversation(conv) {
   if (st && st.seenActivity === conv.last_activity_at && (st.done || (st.waitUntil && Date.now() < st.waitUntil && !cfg.ignoreDelay))) return;   // nothing new: no API call
   const msgs = await cl.messages(conv.id);
   for (const m of msgs) if (m.sender_type) senderTypes.add(`${m.message_type}:${m.sender_type}`);
-  if (!st) st = state.convs[conv.id] = { delayMin: 10 + Math.random() * 5 };     // random delay picked once per conversation
+  if (!st) st = state.convs[conv.id] = { delayMin: 10 + Math.random() * 17 };     // random delay picked once per conversation
   st.touched = Date.now();
   const ev = evaluate({ conv, msgs, st, now: Date.now(), delayMin: st.delayMin, cfg });
   st.seenActivity = conv.last_activity_at;

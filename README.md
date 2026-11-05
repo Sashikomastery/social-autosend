@@ -1,6 +1,6 @@
 # social-autosend
 
-Sends the AI drafts that Commslayer prepares for Facebook comments and Messenger DMs, 10-15 minutes after the customer wrote, and then resolves the conversation. It runs on GitHub Actions every 5 minutes. No AI is used at run time: the draft is sent exactly as it is.
+Sends the AI drafts that Commslayer prepares for Facebook comments and Messenger DMs, 10-27 minutes after the customer wrote, and then resolves the conversation. It runs on GitHub Actions every 5 minutes. No AI is used at run time: the draft is sent exactly as it is.
 
 This repository is public. It contains no customer data, and the logs only show conversation numbers and short codes.
 
@@ -8,7 +8,7 @@ This repository is public. It contains no customer data, and the logs only show 
 
 For every open conversation in the inboxes listed in `INBOX_IDS`:
 
-1. Waits until the customer's last message is older than a random delay of 10-15 minutes (chosen once per conversation).
+1. Waits until the customer's last message is older than a random delay of 10-27 minutes (chosen once per conversation).
 2. Does not send, and hands the conversation to a human, when:
    - the customer's messages contain a word from `COMPLAINT_WORDS`;
    - a label starting with `ai-handover` is present;

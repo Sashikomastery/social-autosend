@@ -5,13 +5,13 @@ const iso = (min) => new Date(T + min * 60_000).toISOString();
 const SECRET_TEXT = 'SECRET-CUSTOMER-TEXT';
 const msg = (id, type, min, content = SECRET_TEXT) => ({ id, message_type: type, private: false, content, sender_type: type === 'incoming' ? 'Contact' : 'User', created_at: iso(min) });
 const convs = {
-  101: { id: 101, inbox_id: 5002, assignee_id: null, status: 'open', labels: [], custom_attributes: { keep: 1 }, last_activity_at: iso(-20) },   // due, AI draft -> send
-  102: { id: 102, inbox_id: 5002, assignee_id: null, status: 'open', labels: [], custom_attributes: {}, last_activity_at: iso(-20) },              // complaint -> hand over
+  101: { id: 101, inbox_id: 5002, assignee_id: null, status: 'open', labels: [], custom_attributes: { keep: 1 }, last_activity_at: iso(-30) },   // due, AI draft -> send
+  102: { id: 102, inbox_id: 5002, assignee_id: null, status: 'open', labels: [], custom_attributes: {}, last_activity_at: iso(-30) },              // complaint -> hand over
   103: { id: 103, inbox_id: 5002, assignee_id: null, status: 'open', labels: [], custom_attributes: {}, last_activity_at: iso(-2) },               // too recent -> wait
   104: { id: 104, inbox_id: 5002, assignee_id: null, status: 'open', labels: [], custom_attributes: {}, last_activity_at: iso(-20) },              // human replied -> skip
 };
 const messages = {
-  101: [msg(1, 'incoming', -20)], 102: [msg(2, 'incoming', -20, 'I want a REFUND')], 103: [msg(3, 'incoming', -2)],
+  101: [msg(1, 'incoming', -30)], 102: [msg(2, 'incoming', -30, 'I want a REFUND')], 103: [msg(3, 'incoming', -2)],
   104: [msg(4, 'incoming', -20), msg(5, 'outgoing', -10)],
 };
 const drafts = { 101: { id: 9, content: 'DRAFT-TEXT-101', source: 'ai', created_at: iso(-18), updated_at: iso(-18) } };
