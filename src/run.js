@@ -20,12 +20,15 @@ const cfg = {
   complaintRe: complaintRegex(parseList(env.COMPLAINT_WORDS)),
   maxAgeMs: Number((MANUAL && DRY && env.MAX_AGE_HOURS_DRY) || env.MAX_AGE_HOURS || 24) * 3600_000,   // the dry-run override never applies to real sending         // older customer messages are left to the humans
   ignoreDelay: MANUAL && DRY && env.IGNORE_DELAY === 'true',
+  maxAutoReplies: Number.isInteger(Number(env.MAX_AUTO_REPLIES)) && Number(env.MAX_AUTO_REPLIES) >= 1 ? Number(env.MAX_AUTO_REPLIES) : 5,   // auto-replies per conversation, then a human takes over
 };
+if (env.MAX_AUTO_REPLIES && cfg.maxAutoReplies === 5 && env.MAX_AUTO_REPLIES.trim() !== '5') console.log('MAX_AUTO_REPLIES is not a whole number of 1 or more: using 5');
 const now = Date.now();
 const state = loadState();
 const cl = makeClient(env.COMMSLAYER_TOKEN_SOCIAL, { maxCalls: Number(env.MAX_CALLS || 60) });
 const slack = (text) => sendSlack(env.SLACK_BOT_TOKEN, env.SLACK_USER_ID, text);
 const save = () => { if (REAL) saveState(state, Date.now()); };
+const newDelay = () => 10 + Math.random() * 17;                  // random delay in minutes, picked once per cycle
 const kindOf = (inbox) => KINDS.get(inbox) || 'unknown';
 const log = (id, msg) => console.log(`conversation ${id}: ${msg}`);
 
@@ -79,9 +82,9 @@ async function handoff(conv, st, ev) {
   }
   const a = await markNeedsHuman(conv);
   st.outcome = 'handed'; st.done = true; st.reason = ev.reason; st.touched = Date.now();
-  event({ id: conv.id, kind: ev.event === 'replied_again' ? 'replied_again' : 'handed', channel: kindOf(conv.inbox_id), reason: ev.reason });
-  if (ev.event === 'replied_again') log(conv.id, 'customer replied again after the auto-reply');
+  event({ id: conv.id, kind: 'handed', channel: kindOf(conv.inbox_id), reason: ev.reason });
   log(conv.id, `needs_human attribute: ${a}`);
+  if (ev.reason === 'auto-reply-limit') await alert(`auto-reply-limit:${conv.id}`, `Conversation ${conv.id} reached the limit of ${cfg.maxAutoReplies} auto-replies. The customer's new message was handed to a human.`);
 }
 
 async function finish(conv, st) {                                 // after a confirmed send: resolve, mark with auto_sent
@@ -99,7 +102,7 @@ async function send(conv, st, ev) {
   save();                                                          // written BEFORE sending: if the run dies, the next run can tell whether it went out
   try { await cl.send(conv.id, ev.text); }                         // the draft exactly as it is
   catch (e) { await fail(conv.id, conv.inbox_id, e); if (st.attempts >= 3) await alert(`send-failed:${conv.id}`, `Sending failed 3 times on conversation ${conv.id}.`); return; }
-  st.outcome = 'sent'; st.done = true; st.sentAt = Date.now();
+  st.outcome = 'sent'; st.done = true; st.sentAt = Date.now(); st.autoReplies = (st.autoReplies || 0) + 1;
   event({ id: conv.id, kind: 'sent', channel: kindOf(conv.inbox_id), delayMin: (Date.now() - Date.parse(ev.lastIn.created_at)) / 60000 });
   log(conv.id, 'sent');
   await finish(conv, st);
@@ -111,9 +114,16 @@ async function processConversation(conv) {
   if (st && st.seenActivity === conv.last_activity_at && (st.done || (st.waitUntil && Date.now() < st.waitUntil && !cfg.ignoreDelay))) return;   // nothing new: no API call
   const msgs = await cl.messages(conv.id);
   for (const m of msgs) if (m.sender_type) senderTypes.add(`${m.message_type}:${m.sender_type}`);
-  if (!st) st = state.convs[conv.id] = { delayMin: 10 + Math.random() * 17 };     // random delay picked once per conversation
+  if (!st) st = state.convs[conv.id] = { delayMin: newDelay() };     // random delay picked once per cycle
   st.touched = Date.now();
-  const ev = evaluate({ conv, msgs, st, now: Date.now(), delayMin: st.delayMin, cfg });
+  let ev = evaluate({ conv, msgs, st, now: Date.now(), delayMin: st.delayMin, cfg });
+  if (ev.action === 'new-cycle') {                                 // the customer wrote again after our auto-reply: a new cycle, exactly like a first message
+    st.autoReplies ??= 1;                                          // state from before the counter existed: a sent conversation had at least one
+    st.delayMin = newDelay(); st.outcome = undefined; st.done = false; st.reason = undefined;
+    note('new-cycle', conv.id); event({ id: conv.id, kind: 'replied_again', channel: kindOf(conv.inbox_id) });
+    log(conv.id, `customer wrote again after the auto-reply: new cycle (${st.autoReplies} of ${cfg.maxAutoReplies} auto-replies used)`);
+    ev = evaluate({ conv, msgs, st, now: Date.now(), delayMin: st.delayMin, cfg });
+  }
   st.seenActivity = conv.last_activity_at;
   if (ev.lastIn && st.msgId !== ev.lastIn.id) { st.done = false; st.attempts = 0; st.sentHash = undefined; st.waitUntil = undefined; }   // a new customer message starts a new cycle
   switch (ev.action) {
@@ -122,7 +132,7 @@ async function processConversation(conv) {
       note(`skip:${ev.reason}`, conv.id); log(conv.id, `skipped (${ev.reason.replace('human-replied', 'human replied')})${ev.senders ? ` senders ${[...new Set(ev.senders)].join('/')}` : ''}`);
       if (ev.terminal && REAL) { st.msgId = ev.lastIn?.id ?? st.msgId; st.done = true; st.outcome = st.outcome || 'skipped'; }
       return;
-    case 'complete': note('complete', conv.id); if (REAL) { st.outcome = 'sent'; st.done = true; log(conv.id, 'earlier send confirmed'); await finish(conv, st); } return;
+    case 'complete': note('complete', conv.id); if (REAL) { st.outcome = 'sent'; st.done = true; st.autoReplies = (st.autoReplies || 0) + 1; log(conv.id, 'earlier send confirmed'); await finish(conv, st); } return;
     case 'handoff': return handoff(conv, st, ev);
     case 'check-draft': {
       const j = judgeDraft(await cl.draft(conv.id), ev.lastIn);

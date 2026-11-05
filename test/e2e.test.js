@@ -6,8 +6,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 const root = path.resolve(import.meta.dirname, '..');
-function run(extraEnv) {
+function run(extraEnv, state) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'autosend-'));
+  if (state) { fs.mkdirSync(path.join(dir, '.state')); fs.writeFileSync(path.join(dir, '.state/state.json'), JSON.stringify({ convs: state, events: [], alerted: {}, reportedDate: '', expiryReminded: '' })); }
   const writesFile = path.join(dir, 'writes.json');
   const r = spawnSync('node', ['--import', path.join(root, 'test/fake-fetch.mjs'), path.join(root, 'src/run.js')], {
     cwd: dir, encoding: 'utf8', timeout: 60000,
@@ -31,6 +32,22 @@ test('real run: sends the due draft, hands the complaint over (first agent missi
   // second run with the saved state: nothing is sent twice
   const state = fs.readFileSync(path.join(r.dir, '.state/state.json'), 'utf8');
   assert.ok(!state.includes('SECRET') && !state.includes('DRAFT-TEXT'));
+});
+
+test('customer writes again after an auto-reply: a new cycle sends; at the limit it goes to a human with one Slack DM; a complaint still goes to a human', () => {
+  const sent = (n) => ({ msgId: 2011, outcome: 'sent', done: true, autoReplies: n, delayMin: 12, touched: Date.now(), seenActivity: 'old', sentHash: 'x' });
+  const r = run({ SEND_ENABLED: 'true', GITHUB_EVENT_NAME: 'schedule', SCENARIO: 'repeat', MAX_AUTO_REPLIES: '3' }, { 201: sent(1), 202: sent(3), 203: sent(1) });
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(r.writes.filter((w) => w[0] === 'SEND'), [['SEND', 201, 'DRAFT-TEXT-201']]);                       // 201: second auto-reply
+  assert.ok(r.writes.some((w) => w[0] === 'PATCH' && w[1] === 201 && w[2].status === 'resolved'));
+  assert.ok(r.writes.some((w) => w[0] === 'PATCH' && w[1] === 202 && w[2].custom_attributes?.needs_human === true));   // 202: limit of 3 reached
+  assert.ok(r.writes.some((w) => w[0] === 'PATCH' && w[1] === 203 && w[2].custom_attributes?.needs_human === true));   // 203: complaint word in the new message
+  const st = JSON.parse(fs.readFileSync(path.join(r.dir, '.state/state.json'), 'utf8')).convs;
+  assert.equal(st[201].autoReplies, 2);
+  assert.deepEqual([st[202].outcome, st[202].reason], ['handed', 'auto-reply-limit']);
+  assert.deepEqual([st[203].outcome, st[203].reason], ['handed', 'complaint-word']);
+  assert.match(r.out, /conversation 202: assigned to chain position 2 \(auto-reply-limit\)/);
+  assert.equal(r.writes.filter((w) => w[0] === 'SLACK').length, 3, 'DMs: fallback x2 (202, 203) and the limit alert (202)');
 });
 
 test('dry run changes nothing in Commslayer', () => {

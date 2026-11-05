@@ -23,7 +23,8 @@ export function romeParts(ms) {
 const t = (m) => Date.parse(m.created_at);
 const byTime = (a, b) => t(a) - t(b) || a.id - b.id;
 
-// First pass. Returns { action: skip | wait | complete | handoff | check-draft, reason, lastIn, ... }.
+// First pass. Returns { action: skip | wait | complete | handoff | check-draft | new-cycle, reason, lastIn, ... }.
+//   new-cycle: the customer wrote again after our auto-reply; the caller re-rolls the delay and calls evaluate again.
 //   st = state entry for this conversation (or undefined), delayMin = its random delay (10-27 min), saved once per conversation.
 export function evaluate({ conv, msgs, st, now, delayMin, cfg }) {
   const real = msgs.filter((m) => !m.private && (m.message_type === 'incoming' || m.message_type === 'outgoing')).sort(byTime);
@@ -32,9 +33,10 @@ export function evaluate({ conv, msgs, st, now, delayMin, cfg }) {
   if (!lastIn) return { action: 'skip', reason: 'no-customer-message', terminal: true };
   const inAt = t(lastIn), same = !!st && st.msgId === lastIn.id;
 
+  let newCycle = false;
   if (st && !same) {                                      // the customer wrote again after we already dealt with the conversation
-    if (st.outcome === 'sent') return { action: 'handoff', reason: 'replied-again', event: 'replied_again', lastIn };
     if (st.outcome === 'handed') return { action: 'skip', reason: 'handed-earlier', terminal: false, lastIn };
+    newCycle = st.outcome === 'sent';                     // after our auto-reply: a new normal cycle, like a first message
   }
   if (same && st.done) return { action: 'skip', reason: 'done', terminal: true, lastIn };
 
@@ -44,6 +46,10 @@ export function evaluate({ conv, msgs, st, now, delayMin, cfg }) {
     return { action: 'skip', reason: 'human-replied', terminal: true, lastIn, senders: after.map((m) => m.sender_type || '?') };
   }
   if (now - inAt > cfg.maxAgeMs) return { action: 'skip', reason: 'too-old', terminal: true, lastIn };
+  if (newCycle) {
+    if ((st.autoReplies ?? 1) >= (cfg.maxAutoReplies ?? 5)) return { action: 'handoff', reason: 'auto-reply-limit', lastIn };   // state from before the counter: a sent conversation had at least 1
+    return { action: 'new-cycle', lastIn };
+  }
   const dueAt = inAt + delayMin * 60_000;
   if (!cfg.ignoreDelay && now < dueAt) return { action: 'wait', dueAt, lastIn };
 

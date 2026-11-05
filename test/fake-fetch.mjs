@@ -14,7 +14,17 @@ const messages = {
   101: [msg(1, 'incoming', -30)], 102: [msg(2, 'incoming', -30, 'I want a REFUND')], 103: [msg(3, 'incoming', -2)],
   104: [msg(4, 'incoming', -20), msg(5, 'outgoing', -10)],
 };
-const drafts = { 101: { id: 9, content: 'DRAFT-TEXT-101', source: 'ai', created_at: iso(-18), updated_at: iso(-18) } };
+// SCENARIO=repeat: customers who wrote again after an auto-reply (the saved state is written by the test)
+if (process.env.SCENARIO === 'repeat') {
+  for (const k of Object.keys(convs)) { delete convs[k]; delete messages[k]; }
+  const again = (id, text) => {
+    convs[id] = { id, inbox_id: 5002, assignee_id: null, status: 'open', labels: [], custom_attributes: { keep: 1 }, last_activity_at: iso(-30) };
+    messages[id] = [msg(id * 10 + 1, 'incoming', -120), msg(id * 10 + 2, 'outgoing', -100, 'DRAFT-TEXT'), msg(id * 10 + 3, 'incoming', -30, text)];
+  };
+  again(201, 'one more question'); again(202, 'and another question'); again(203, 'I want a REFUND');
+}
+const aiDraft = (id, n, min) => ({ id: n, content: `DRAFT-TEXT-${id}`, source: 'ai', created_at: iso(min), updated_at: iso(min) });
+const drafts = { 101: aiDraft(101, 9, -18), 201: aiDraft(201, 91, -28), 202: aiDraft(202, 92, -28), 203: aiDraft(203, 93, -28) };
 const writes = [];
 const json = (b, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'content-type': 'application/json' } });
 globalThis.fetch = async (url, init = {}) => {

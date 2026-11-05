@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { evaluate, judgeDraft, complaintRegex, parseKinds, sha, romeParts } from '../src/lib.js';
 
 const WORDS = 'refund,sue,cancel my order,rip off,truffa,fuck'.split(',');
-const cfg = { complaintRe: complaintRegex(WORDS), maxAgeMs: 24 * 3600_000, ignoreDelay: false };
+const cfg = { complaintRe: complaintRegex(WORDS), maxAgeMs: 24 * 3600_000, ignoreDelay: false, maxAutoReplies: 5 };
 const T0 = Date.parse('2026-11-05T10:00:00Z');
 const at = (min) => new Date(T0 + min * 60_000).toISOString();
 const inc = (id, min, content = 'hello') => ({ id, message_type: 'incoming', private: false, content, created_at: at(min) });
@@ -34,9 +34,48 @@ test('three customer messages in a row go to a human', () => {
 test('ai-handover label goes to a human', () => assert.equal(run([inc(1, 0)], { conv: { labels: ['ai-handover-billing'] } }).reason, 'ai-handover'));
 test('customer messages older than the max age are left alone', () => assert.equal(run([inc(1, 0)], { nowMin: 25 * 60 }).reason, 'too-old'));
 test('a finished conversation is not processed twice for the same message', () => assert.equal(run([inc(1, 0)], { st: { msgId: 1, done: true } }).reason, 'done'));
-test('customer writes again after an auto-reply: handed to a human', () => {
-  const r = run([inc(1, 0), out(2, 12), inc(3, 30)], { st: { msgId: 1, outcome: 'sent', done: true }, nowMin: 50 });
-  assert.deepEqual([r.action, r.reason, r.event], ['handoff', 'replied-again', 'replied_again']);
+// A customer message after our auto-reply starts a new normal cycle. The caller (run.js) re-rolls the delay,
+// clears outcome/done and calls evaluate again, so the second step below uses the state it leaves behind.
+const afterReply = (o = {}) => ({ msgId: 1, outcome: 'sent', done: true, autoReplies: 1, ...o });
+const reset = (o = {}) => ({ msgId: 1, outcome: undefined, done: false, autoReplies: 1, ...o });
+const thread = [inc(1, 0), out(2, 12), inc(3, 30)];
+test('customer writes again after an auto-reply: a new cycle starts, not a handoff', () => {
+  const r = run(thread, { st: afterReply(), nowMin: 31 });
+  assert.deepEqual([r.action, r.lastIn.id], ['new-cycle', 3]);
+});
+test('new cycle behaves like a first message: waits for its delay, then checks the draft', () => {
+  assert.equal(run(thread, { st: reset(), nowMin: 35, delay: 12 }).action, 'wait');          // 5 min after the new message
+  assert.equal(run(thread, { st: reset(), nowMin: 43, delay: 12 }).action, 'check-draft');   // 13 min after it
+});
+test('new cycle: the complaint-word check also covers the new message', () => {
+  const msgs = [inc(1, 0), out(2, 12), inc(3, 30, 'this is a rip off')];
+  assert.equal(run(msgs, { st: afterReply(), nowMin: 31 }).action, 'new-cycle');             // the check runs after the delay, like for a first message
+  assert.deepEqual([run(msgs, { st: reset(), nowMin: 50 }).action, run(msgs, { st: reset(), nowMin: 50 }).reason], ['handoff', 'complaint-word']);
+});
+test('new cycle: three customer messages in a row without a reply still go to a human', () => {
+  const msgs = [inc(1, 0), out(2, 12), inc(3, 30), inc(4, 31), inc(5, 32)];
+  assert.equal(run(msgs, { st: reset(), nowMin: 60 }).reason, 'three-in-a-row');
+});
+test('new cycle: a human reply to the new message skips, a too-old message is left alone', () => {
+  assert.equal(run([...thread, out(4, 35)], { st: afterReply(), nowMin: 40 }).reason, 'human-replied');
+  assert.equal(run(thread, { st: afterReply(), nowMin: 30 + 25 * 60 }).reason, 'too-old');
+});
+test('auto-reply limit: the next customer message after N auto-replies goes to a human', () => {
+  const r = run(thread, { st: afterReply({ autoReplies: 5 }), nowMin: 31 });
+  assert.deepEqual([r.action, r.reason], ['handoff', 'auto-reply-limit']);
+  assert.equal(run(thread, { st: afterReply({ autoReplies: 4 }), nowMin: 31 }).action, 'new-cycle');
+});
+test('auto-reply limit is configurable and old state without a counter counts as one reply', () => {
+  assert.equal(run(thread, { st: afterReply({ autoReplies: 2 }), cfg: { maxAutoReplies: 2 }, nowMin: 31 }).reason, 'auto-reply-limit');
+  assert.equal(run(thread, { st: afterReply({ autoReplies: undefined }), nowMin: 31 }).action, 'new-cycle');
+  assert.equal(run(thread, { st: afterReply({ autoReplies: undefined }), cfg: { maxAutoReplies: 1 }, nowMin: 31 }).reason, 'auto-reply-limit');
+});
+test('auto-reply limit does not hand over a message a human already answered', () => {
+  assert.equal(run([...thread, out(4, 35)], { st: afterReply({ autoReplies: 5 }), nowMin: 40 }).reason, 'human-replied');
+});
+test('a conversation already handed to a human stays with them', () => {
+  const r = run(thread, { st: { msgId: 1, outcome: 'handed', done: true }, nowMin: 31 });
+  assert.deepEqual([r.action, r.reason], ['skip', 'handed-earlier']);
 });
 test('a send that went out but was not confirmed is completed, not repeated', () => {
   const r = run([inc(1, 0), out(2, 12, 'the draft', 'User')], { st: { msgId: 1, sentHash: sha('the draft') } });

@@ -59,6 +59,7 @@ jobs:
           IGNORE_DELAY: ${{ inputs.ignore_delay }}
           MAX_AGE_HOURS_DRY: ${{ inputs.max_age_hours }}
           MAX_AGE_HOURS: ${{ vars.MAX_AGE_HOURS }}
+          MAX_AUTO_REPLIES: ${{ vars.MAX_AUTO_REPLIES }}
           PROBE_CONVERSATION_ID: ${{ inputs.probe_conversation_id }}
         run: node src/run.js
       - name: Save state
