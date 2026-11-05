@@ -23,8 +23,15 @@ if (process.env.SCENARIO === 'repeat') {
   };
   again(201, 'one more question'); again(202, 'and another question'); again(203, 'I want a REFUND');
 }
+if (process.env.SCENARIO === 'human-joined') {
+  for (const k of Object.keys(convs)) { delete convs[k]; delete messages[k]; }
+  for (const [id, assignee] of [[301, 4242], [302, null]]) {
+    convs[id] = { id, inbox_id: 5002, assignee_id: assignee, status: 'open', labels: [], custom_attributes: {}, last_activity_at: iso(-30) };
+    messages[id] = [msg(id * 10 + 1, 'incoming', -120), msg(id * 10 + 2, 'outgoing', -100, 'DRAFT-TEXT'), msg(id * 10 + 3, 'outgoing', -60, 'HUMAN-TEXT'), msg(id * 10 + 4, 'incoming', -30, 'one more question')];
+  }
+}
 const aiDraft = (id, n, min) => ({ id: n, content: `DRAFT-TEXT-${id}`, source: 'ai', created_at: iso(min), updated_at: iso(min) });
-const drafts = { 101: aiDraft(101, 9, -18), 201: aiDraft(201, 91, -28), 202: aiDraft(202, 92, -28), 203: aiDraft(203, 93, -28) };
+const drafts = { 101: aiDraft(101, 9, -18), 201: aiDraft(201, 91, -28), 202: aiDraft(202, 92, -28), 203: aiDraft(203, 93, -28), 301: aiDraft(301, 94, -28), 302: aiDraft(302, 95, -28) };
 const writes = [];
 const json = (b, status = 200) => new Response(JSON.stringify(b), { status, headers: { 'content-type': 'application/json' } });
 globalThis.fetch = async (url, init = {}) => {

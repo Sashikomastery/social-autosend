@@ -1,4 +1,4 @@
-// social-autosend: sends the AI draft of Facebook comments / Messenger DMs 10-27 minutes after the customer wrote, then resolves.
+// social-autosend: sends the AI draft of Facebook comments / Messenger DMs 10-15 minutes after the customer wrote, then resolves.
 // Logs contain conversation ids and short codes only. Never message texts, names or tokens.
 import { makeClient, ApiError, BudgetError } from './commslayer.js';
 import { sendSlack } from './slack.js';
@@ -28,7 +28,7 @@ const state = loadState();
 const cl = makeClient(env.COMMSLAYER_TOKEN_SOCIAL, { maxCalls: Number(env.MAX_CALLS || 60) });
 const slack = (text) => sendSlack(env.SLACK_BOT_TOKEN, env.SLACK_USER_ID, text);
 const save = () => { if (REAL) saveState(state, Date.now()); };
-const newDelay = () => 10 + Math.random() * 17;                  // random delay in minutes, picked once per cycle
+const newDelay = () => 10 + Math.random() * 5;                  // random delay in minutes, picked once per cycle
 const kindOf = (inbox) => KINDS.get(inbox) || 'unknown';
 const log = (id, msg) => console.log(`conversation ${id}: ${msg}`);
 
@@ -98,7 +98,7 @@ async function send(conv, st, ev) {
   note('send', conv.id);
   if (DRY) { log(conv.id, `would send the draft (${kindOf(conv.inbox_id)}, delay ${st.delayMin.toFixed(1)} min)`); return; }
   if ((st.attempts || 0) >= 3) { await handoff(conv, st, { reason: 'send-failed', lastIn: ev.lastIn }); await alert(`send-failed:${conv.id}`, `Sending failed 3 times on conversation ${conv.id}. It was handed to a human.`); return; }
-  st.attempts = (st.attempts || 0) + 1; st.msgId = ev.lastIn.id; st.sentHash = sha(ev.text); st.touched = Date.now();
+  st.attempts = (st.attempts || 0) + 1; st.msgId = ev.lastIn.id; st.sentHash = sha(ev.text); st.sentHashes = [...(st.sentHashes || []), st.sentHash].slice(-10); st.touched = Date.now();
   save();                                                          // written BEFORE sending: if the run dies, the next run can tell whether it went out
   try { await cl.send(conv.id, ev.text); }                         // the draft exactly as it is
   catch (e) { await fail(conv.id, conv.inbox_id, e); if (st.attempts >= 3) await alert(`send-failed:${conv.id}`, `Sending failed 3 times on conversation ${conv.id}.`); return; }

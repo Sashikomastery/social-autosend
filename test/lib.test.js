@@ -94,3 +94,27 @@ test('parsers', () => {
   assert.equal(parseKinds('5001:messenger,5002:comment').get(5002), 'comment');
   assert.equal(romeParts(Date.parse('2026-11-05T07:30:00Z')).hour, 8);
 });
+
+// Human joined: an outgoing message between our last auto-reply and the new customer message that our token did not send.
+const ours = (o = {}) => afterReply({ sentHashes: [sha('AUTO')], sentHash: sha('AUTO'), ...o });
+const withHuman = [inc(1, 0), out(2, 12, 'AUTO', 'User'), out(3, 20, 'a human wrote this', 'User'), inc(4, 30)];
+test('human joined: a message we did not send after our auto-reply hands over, even with a new customer message pending', () => {
+  const r = run(withHuman, { st: ours(), nowMin: 31 });
+  assert.deepEqual([r.action, r.reason, r.lastIn.id], ['handoff', 'human-joined', 4]);
+});
+test('human joined takes priority over the auto-reply limit; a human message BEFORE our auto-reply does not count', () => {
+  assert.equal(run(withHuman, { st: ours({ autoReplies: 5 }), nowMin: 31 }).reason, 'human-joined');
+  const early = [inc(1, 0), out(2, 5, 'a human wrote this'), out(3, 12, 'AUTO'), inc(4, 30)];
+  assert.equal(run(early, { st: ours(), nowMin: 31 }).action, 'new-cycle');
+});
+test('human joined: only our own messages in between means a normal new cycle', () => {
+  assert.equal(run([inc(1, 0), out(2, 12, 'AUTO'), out(3, 20, 'AUTO'), inc(4, 30)], { st: ours({ sentHashes: [sha('AUTO')] }), nowMin: 31 }).action, 'new-cycle');
+});
+test('human joined: old state with one sentHash still recognises our message; without any hash only later messages count', () => {
+  assert.equal(run([inc(1, 0), out(2, 12, 'AUTO'), inc(4, 30)], { st: afterReply({ sentHash: sha('AUTO') }), nowMin: 31 }).action, 'new-cycle');
+  assert.equal(run(withHuman, { st: afterReply({ sentAt: T0 + 13 * 60_000 }), nowMin: 31 }).reason, 'human-joined');
+  assert.equal(run([inc(1, 0), out(2, 12, 'AUTO'), inc(4, 30)], { st: afterReply({ sentAt: T0 + 13 * 60_000 }), nowMin: 31 }).action, 'new-cycle');
+});
+test('human joined: a handoff is only for a new message after our auto-reply (a first message is unaffected)', () => {
+  assert.equal(run([inc(1, 0)], { nowMin: 13 }).action, 'check-draft');
+});

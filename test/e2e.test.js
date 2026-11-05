@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { sha } from '../src/lib.js';
 
 const root = path.resolve(import.meta.dirname, '..');
 function run(extraEnv, state) {
@@ -35,7 +36,7 @@ test('real run: sends the due draft, hands the complaint over (first agent missi
 });
 
 test('customer writes again after an auto-reply: a new cycle sends; at the limit it goes to a human with one Slack DM; a complaint still goes to a human', () => {
-  const sent = (n) => ({ msgId: 2011, outcome: 'sent', done: true, autoReplies: n, delayMin: 12, touched: Date.now(), seenActivity: 'old', sentHash: 'x' });
+  const sent = (n) => ({ msgId: 2011, outcome: 'sent', done: true, autoReplies: n, delayMin: 12, touched: Date.now(), seenActivity: 'old', sentHash: sha('DRAFT-TEXT'), sentHashes: [sha('DRAFT-TEXT')] });
   const r = run({ SEND_ENABLED: 'true', GITHUB_EVENT_NAME: 'schedule', SCENARIO: 'repeat', MAX_AUTO_REPLIES: '3' }, { 201: sent(1), 202: sent(3), 203: sent(1) });
   assert.equal(r.code, 0, r.out);
   assert.deepEqual(r.writes.filter((w) => w[0] === 'SEND'), [['SEND', 201, 'DRAFT-TEXT-201']]);                       // 201: second auto-reply
@@ -48,6 +49,19 @@ test('customer writes again after an auto-reply: a new cycle sends; at the limit
   assert.deepEqual([st[203].outcome, st[203].reason], ['handed', 'complaint-word']);
   assert.match(r.out, /conversation 202: assigned to chain position 2 \(auto-reply-limit\)/);
   assert.equal(r.writes.filter((w) => w[0] === 'SLACK').length, 3, 'DMs: fallback x2 (202, 203) and the limit alert (202)');
+});
+
+test('human joined: a person wrote after our auto-reply, then the customer wrote again -> handed over, no send, assignee kept', () => {
+  const st = { msgId: 3011, outcome: 'sent', done: true, autoReplies: 1, delayMin: 12, touched: Date.now(), seenActivity: 'old', sentHash: sha('DRAFT-TEXT'), sentHashes: [sha('DRAFT-TEXT')] };
+  const r = run({ SEND_ENABLED: 'true', GITHUB_EVENT_NAME: 'schedule', SCENARIO: 'human-joined' }, { 301: st, 302: st });
+  assert.equal(r.code, 0, r.out);
+  assert.deepEqual(r.writes.filter((w) => w[0] === 'SEND'), []);
+  assert.ok(r.writes.some((w) => w[0] === 'PATCH' && w[1] === 301 && w[2].custom_attributes?.needs_human === true));
+  assert.ok(!r.writes.some((w) => w[0] === 'PATCH' && w[1] === 301 && w[2].assignee_id));      // 301 has an assignee: kept
+  assert.ok(r.writes.some((w) => w[0] === 'PATCH' && w[1] === 302 && w[2].assignee_id === 9002));   // 302 has none: chain
+  const s = JSON.parse(fs.readFileSync(path.join(r.dir, '.state/state.json'), 'utf8')).convs;
+  assert.deepEqual([s[301].outcome, s[301].reason], ['handed', 'human-joined']);
+  assert.match(r.out, /conversation 301: kept with its assignee \(human-joined\)/);
 });
 
 test('dry run changes nothing in Commslayer', () => {

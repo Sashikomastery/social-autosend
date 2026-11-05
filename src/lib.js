@@ -23,9 +23,21 @@ export function romeParts(ms) {
 const t = (m) => Date.parse(m.created_at);
 const byTime = (a, b) => t(a) - t(b) || a.id - b.id;
 
+// Outgoing messages between our last auto-reply and the customer's new message that our API token did not send.
+// Ours are recognised by the hash of the text we sent (st.sentHashes, plus the older single st.sentHash).
+function humanJoined(real, lastIn, st) {
+  const mine = new Set([...(st.sentHashes || []), ...(st.sentHash ? [st.sentHash] : [])]);
+  const before = real.slice(0, real.lastIndexOf(lastIn)).filter((m) => m.message_type === 'outgoing');
+  const isMine = (m) => mine.has(sha(m.content || ''));
+  const lastMine = before.map(isMine).lastIndexOf(true);
+  const window = lastMine >= 0 ? before.slice(lastMine + 1) : before.filter((m) => Number.isFinite(st.sentAt) && t(m) > st.sentAt);   // no hash match: only messages after our send was recorded
+  const others = window.filter((m) => !isMine(m));
+  return others.length ? others.map((m) => m.sender_type || '?') : null;
+}
+
 // First pass. Returns { action: skip | wait | complete | handoff | check-draft | new-cycle, reason, lastIn, ... }.
 //   new-cycle: the customer wrote again after our auto-reply; the caller re-rolls the delay and calls evaluate again.
-//   st = state entry for this conversation (or undefined), delayMin = its random delay (10-27 min), saved once per conversation.
+//   st = state entry for this conversation (or undefined), delayMin = its random delay (10-15 min), saved once per conversation.
 export function evaluate({ conv, msgs, st, now, delayMin, cfg }) {
   const real = msgs.filter((m) => !m.private && (m.message_type === 'incoming' || m.message_type === 'outgoing')).sort(byTime);
   const incoming = real.filter((m) => m.message_type === 'incoming');
@@ -47,6 +59,8 @@ export function evaluate({ conv, msgs, st, now, delayMin, cfg }) {
   }
   if (now - inAt > cfg.maxAgeMs) return { action: 'skip', reason: 'too-old', terminal: true, lastIn };
   if (newCycle) {
+    const joined = humanJoined(real, lastIn, st);
+    if (joined) return { action: 'handoff', reason: 'human-joined', lastIn, senders: joined };   // a person wrote in this conversation after our auto-reply: no new AI draft
     if ((st.autoReplies ?? 1) >= (cfg.maxAutoReplies ?? 5)) return { action: 'handoff', reason: 'auto-reply-limit', lastIn };   // state from before the counter: a sent conversation had at least 1
     return { action: 'new-cycle', lastIn };
   }
