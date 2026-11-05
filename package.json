@@ -1,0 +1,9 @@
+{
+  "name": "social-autosend",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Sends the AI drafts of Facebook comments and Messenger DMs after a short delay, then resolves the conversation.",
+  "engines": { "node": ">=22" },
+  "scripts": { "test": "node --test test/*.test.js" }
+}

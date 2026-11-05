@@ -1,0 +1,63 @@
+name: social-autosend
+
+# Only schedule and manual start. Never pull_request, so nobody outside can reach the secrets.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: read only, nothing is sent, assigned or changed in Commslayer"
+        type: boolean
+        default: true
+      ignore_delay:
+        description: "Dry run only: also show conversations that are still inside the 10-15 min delay"
+        type: boolean
+        default: false
+      probe_conversation_id:
+        description: "Optional: id of a TEST conversation, to check that Commslayer accepts the custom attributes auto_sent / needs_human (this writes to that conversation)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: social-autosend
+  cancel-in-progress: false      # a run in progress is never cancelled; the next one waits
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+      - name: Restore state (conversation ids, delays, outcomes: no customer text)
+        uses: actions/cache/restore@v5
+        with:
+          path: .state
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+      - name: Run
+        env:
+          COMMSLAYER_TOKEN_SOCIAL: ${{ secrets.COMMSLAYER_TOKEN_SOCIAL }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          AGENT_CHAIN: ${{ vars.AGENT_CHAIN }}
+          SLACK_USER_ID: ${{ vars.SLACK_USER_ID }}
+          INBOX_IDS: ${{ vars.INBOX_IDS }}
+          INBOX_KINDS: ${{ vars.INBOX_KINDS }}
+          COMPLAINT_WORDS: ${{ vars.COMPLAINT_WORDS }}
+          SEND_ENABLED: ${{ vars.SEND_ENABLED }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          IGNORE_DELAY: ${{ inputs.ignore_delay }}
+          PROBE_CONVERSATION_ID: ${{ inputs.probe_conversation_id }}
+        run: node src/run.js
+      - name: Save state
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: .state
+          key: state-${{ github.run_id }}

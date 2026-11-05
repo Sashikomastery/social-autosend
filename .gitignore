@@ -1,0 +1,9 @@
+# local state, logs and secrets: never commit these
+.state/
+state.json
+*.log
+logs/
+.env
+.env.*
+node_modules/
+.DS_Store
