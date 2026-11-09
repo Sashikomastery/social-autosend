@@ -64,6 +64,42 @@ test('human joined: a person wrote after our auto-reply, then the customer wrote
   assert.match(r.out, /conversation 301: kept with its assignee \(human-joined\)/);
 });
 
+const NR = { SCENARIO: 'no-reply', INBOX_KINDS: '5001:messenger,5002:comment', PURCHASE_WORDS: 'wholesale,where can i buy' };   // fake words only
+test('no-reply-needed: short comment without a draft is resolved with the attribute; the other cases are handed over or sent as described', () => {
+  const r = run({ SEND_ENABLED: 'true', GITHUB_EVENT_NAME: 'schedule', ...NR });
+  assert.equal(r.code, 0, r.out);
+  const patch = (id) => r.writes.filter((w) => w[0] === 'PATCH' && w[1] === id).map((w) => w[2]);
+  // 401: resolved, attribute set, the existing attribute kept, nothing sent, not assigned
+  assert.ok(patch(401).some((b) => b.status === 'resolved'));
+  assert.ok(patch(401).some((b) => b.custom_attributes?.no_reply_needed === true && b.custom_attributes.keep === 1));
+  assert.ok(!patch(401).some((b) => b.assignee_id || b.custom_attributes?.needs_human));
+  // 402 ("?"), 405 (too long), 406 (Messenger): handed over with no-draft; 404 and 403: purchase-mention; 408: complaint-word
+  for (const id of [402, 404, 405, 406, 403, 408]) assert.ok(patch(id).some((b) => b.custom_attributes?.needs_human === true), `${id} handed over`);
+  for (const id of [402, 404, 405, 406, 403, 408]) assert.ok(!patch(id).some((b) => b.status === 'resolved'), `${id} not resolved`);
+  const st = JSON.parse(fs.readFileSync(path.join(r.dir, '.state/state.json'), 'utf8')).convs;
+  assert.deepEqual([st[401].outcome, st[401].done], ['no-reply', true]);
+  assert.deepEqual([402, 404, 405, 406, 403, 408].map((id) => st[id].reason), ['no-draft', 'purchase-mention', 'no-draft', 'no-draft', 'purchase-mention', 'complaint-word']);
+  // 403: the AI draft exists but is NOT sent. 407: Messenger with a purchase word and a draft is sent as today
+  assert.deepEqual(r.writes.filter((w) => w[0] === 'SEND'), [['SEND', 407, 'DRAFT-TEXT-407']]);
+  assert.ok(patch(407).some((b) => b.status === 'resolved') && patch(407).some((b) => b.custom_attributes?.auto_sent === true));
+  assert.match(r.out, /conversation 401: resolved \(no reply needed\)/);
+  assert.match(r.out, /conversation 403: .*\(purchase-mention\)/);
+  assert.ok(!r.out.includes('FAKE-CHAT') && !r.out.includes('TOKEN-XYZ'), 'log leaks text');
+  assert.ok(!fs.readFileSync(path.join(r.dir, '.state/state.json'), 'utf8').includes('FAKE-CHAT'), 'state has no customer text');
+});
+
+test('no-reply-needed: dry run writes nothing, counts the key, and the same comment is not resolved twice in a real run', () => {
+  const d = run({ SEND_ENABLED: 'true', DRY_RUN: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch', IGNORE_DELAY: 'true', ...NR });
+  assert.equal(d.code, 0, d.out);
+  assert.deepEqual(d.writes.filter((w) => w[0] !== 'SLACK'), []);
+  assert.match(d.out, /no-reply-needed: 1 \[401\]/);
+  assert.match(d.out, /would resolve \(no reply needed, comment\)/);
+  const first = run({ SEND_ENABLED: 'true', GITHUB_EVENT_NAME: 'schedule', ...NR });
+  const state = JSON.parse(fs.readFileSync(path.join(first.dir, '.state/state.json'), 'utf8')).convs;
+  const second = run({ SEND_ENABLED: 'true', GITHUB_EVENT_NAME: 'schedule', ...NR }, state);          // same conversations, saved state
+  assert.ok(!second.writes.some((w) => w[0] === 'PATCH' && w[1] === 401), '401 is not patched again');
+});
+
 test('dry run changes nothing in Commslayer', () => {
   const r = run({ SEND_ENABLED: 'true', DRY_RUN: 'true', GITHUB_EVENT_NAME: 'workflow_dispatch', IGNORE_DELAY: 'true' });
   assert.equal(r.code, 0, r.out);

@@ -3,12 +3,13 @@ import assert from 'node:assert/strict';
 import { evaluate, judgeDraft, complaintRegex, parseKinds, sha, romeParts } from '../src/lib.js';
 
 const WORDS = 'refund,sue,cancel my order,rip off,truffa,fuck'.split(',');
-const cfg = { complaintRe: complaintRegex(WORDS), maxAgeMs: 24 * 3600_000, ignoreDelay: false, maxAutoReplies: 15 };
+const PURCHASE = 'wholesale,where can i buy'.split(',');                       // fake words for the tests only
+const cfg = { complaintRe: complaintRegex(WORDS), purchaseRe: complaintRegex(PURCHASE), noReplyMax: 60, maxAgeMs: 24 * 3600_000, ignoreDelay: false, maxAutoReplies: 15 };
 const T0 = Date.parse('2026-11-05T10:00:00Z');
 const at = (min) => new Date(T0 + min * 60_000).toISOString();
 const inc = (id, min, content = 'hello') => ({ id, message_type: 'incoming', private: false, content, created_at: at(min) });
 const out = (id, min, content = 'hi', sender_type = 'User') => ({ id, message_type: 'outgoing', private: false, content, sender_type, created_at: at(min) });
-const run = (msgs, o = {}) => evaluate({ conv: { id: 1, labels: [], ...(o.conv || {}) }, msgs, st: o.st, now: T0 + (o.nowMin ?? 20) * 60_000, delayMin: o.delay ?? 12, cfg: { ...cfg, ...(o.cfg || {}) } });
+const run = (msgs, o = {}) => evaluate({ conv: { id: 1, labels: [], ...(o.conv || {}) }, msgs, st: o.st, now: T0 + (o.nowMin ?? 20) * 60_000, delayMin: o.delay ?? 12, cfg: { ...cfg, ...(o.cfg || {}) }, kind: o.kind });
 
 test('waits until the random delay is over', () => {
   assert.equal(run([inc(1, 0)], { nowMin: 11 }).action, 'wait');
@@ -131,4 +132,52 @@ test('the same customer writes 4 times and gets 4 automatic replies (default cap
     st = { msgId: ev.lastIn.id, outcome: 'sent', done: true, autoReplies: replies, sentHash: sha(draftText(n)), sentHashes: [sha(draftText(n))] };
   }
   assert.equal(replies, 4);
+});
+
+// ---- comments without a draft, purchase words ----
+const ai = (min = 1) => ({ content: 'x', source: 'ai', created_at: at(min), updated_at: at(min) });
+const judge = (text, draft = null, kind = 'comment', c = {}) => judgeDraft(draft, inc(1, 0, text), { kind, cfg: { ...cfg, ...c } });
+test('comment without a draft: short chat is resolved as no-reply-needed (nothing is handed over)', () => {
+  for (const text of ['Public Library', 'nice one', 'Thanks!', 'ok']) assert.equal(judge(text).action, 'no-reply-needed', text);
+  assert.equal(judge('Public Library \u{1F609}').action, 'no-reply-needed');
+});
+test('comment without a draft: a question mark (also full-width and inverted) means handoff no-draft', () => {
+  for (const text of ['Is it open?', 'is it open\uFF1F', '\u00BFcuando llega', 'really ? ok']) { const r = judge(text); assert.deepEqual([r.action, r.reason], ['handoff', 'no-draft'], text); }
+});
+test('comment without a draft: length limit counts characters (emoji = 1), 60 is allowed, 61 is not', () => {
+  assert.equal(judge('a'.repeat(60)).action, 'no-reply-needed');
+  assert.equal(judge('a'.repeat(61)).reason, 'no-draft');
+  assert.equal(judge('a'.repeat(59) + '\u{1F609}').action, 'no-reply-needed');          // 60 characters
+  assert.equal(judge('a'.repeat(60) + '\u{1F609}').reason, 'no-draft');                 // 61 characters
+  assert.equal(judge('a'.repeat(30), null, 'comment', { noReplyMax: 20 }).reason, 'no-draft');
+});
+test('comment without a draft: empty text and whitespace are not judged, they go to a human', () => {
+  for (const text of ['', '   ']) assert.equal(judge(text).reason, 'no-draft');
+  assert.equal(judgeDraft(null, { id: 1, message_type: 'incoming', created_at: at(0) }, { kind: 'comment', cfg }).reason, 'no-draft');   // no text at all
+});
+test('comment without a draft: a complaint word is never closed', () => {
+  assert.notEqual(judge('refund please').action, 'no-reply-needed');
+  assert.equal(run([inc(1, 0, 'refund please')], { kind: 'comment' }).reason, 'complaint-word');        // evaluate hands it over first
+});
+test('messenger (or unknown kind) without a draft: handoff no-draft as before', () => {
+  for (const kind of ['messenger', 'unknown']) { const r = judge('nice one', null, kind); assert.deepEqual([r.action, r.reason], ['handoff', 'no-draft'], kind); }
+  const none = judgeDraft(null, inc(1, 0, 'nice one'), { cfg });                                   // kind not given
+  assert.deepEqual([none.action, none.reason], ['handoff', 'no-draft']);
+});
+test('comment with a draft: the draft rules are unchanged (short text does not matter)', () => {
+  assert.equal(judge('nice one', ai()).action, 'send');
+  assert.equal(judge('nice one', { content: 'x', source: 'external', created_at: at(1) }).reason, 'human-draft');
+});
+test('purchase words (comments): always a handoff purchase-mention, before the draft is looked at', () => {
+  for (const c of ['Where can I buy this', 'do you do WHOLESALE', 'wholesale!']) assert.deepEqual([run([inc(1, 0, c)], { kind: 'comment' }).action, run([inc(1, 0, c)], { kind: 'comment' }).reason], ['handoff', 'purchase-mention'], c);
+  assert.equal(run([inc(1, 0, 'nice'), inc(2, 1, 'where can i buy')], { kind: 'comment' }).reason, 'purchase-mention');   // any customer message counts
+});
+test('purchase words: whole words only, and complaint words keep priority', () => {
+  assert.notEqual(run([inc(1, 0, 'wholesaler')], { kind: 'comment' }).reason, 'purchase-mention');
+  assert.equal(run([inc(1, 0, 'refund where can i buy')], { kind: 'comment' }).reason, 'complaint-word');
+});
+test('purchase words do not apply to messenger, unknown kind or an empty list', () => {
+  for (const kind of ['messenger', 'unknown', undefined]) assert.equal(run([inc(1, 0, 'where can i buy')], { kind }).action, 'check-draft', String(kind));
+  assert.equal(run([inc(1, 0, 'where can i buy')], { kind: 'comment', cfg: { purchaseRe: complaintRegex([]) } }).action, 'check-draft');
+  assert.equal(run([inc(1, 0, 'where can i buy')], { kind: 'comment', cfg: { purchaseRe: undefined } }).action, 'check-draft');
 });
