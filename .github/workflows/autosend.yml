@@ -54,6 +54,8 @@ jobs:
           INBOX_IDS: ${{ vars.INBOX_IDS }}
           INBOX_KINDS: ${{ vars.INBOX_KINDS }}
           COMPLAINT_WORDS: ${{ vars.COMPLAINT_WORDS }}
+          PURCHASE_WORDS: ${{ vars.PURCHASE_WORDS }}
+          NO_REPLY_MAX_CHARS: ${{ vars.NO_REPLY_MAX_CHARS }}
           SEND_ENABLED: ${{ vars.SEND_ENABLED }}
           DRY_RUN: ${{ inputs.dry_run }}
           IGNORE_DELAY: ${{ inputs.ignore_delay }}

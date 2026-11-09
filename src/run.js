@@ -18,10 +18,13 @@ if (missing.length) { console.error(`missing settings: ${missing.join(', ')}`); 
 const INBOXES = parseIds(env.INBOX_IDS), KINDS = parseKinds(env.INBOX_KINDS), CHAIN = parseIds(env.AGENT_CHAIN);
 const cfg = {
   complaintRe: complaintRegex(parseList(env.COMPLAINT_WORDS)),
+  purchaseRe: complaintRegex(parseList(env.PURCHASE_WORDS)),          // optional; no words in the code, an empty list never matches
+  noReplyMax: Number.isInteger(Number(env.NO_REPLY_MAX_CHARS)) && Number(env.NO_REPLY_MAX_CHARS) >= 1 ? Number(env.NO_REPLY_MAX_CHARS) : 60,   // comments without a draft up to this length (and no "?") are closed, not handed over
   maxAgeMs: Number((MANUAL && DRY && env.MAX_AGE_HOURS_DRY) || env.MAX_AGE_HOURS || 24) * 3600_000,   // the dry-run override never applies to real sending         // older customer messages are left to the humans
   ignoreDelay: MANUAL && DRY && env.IGNORE_DELAY === 'true',
   maxAutoReplies: Number.isInteger(Number(env.MAX_AUTO_REPLIES)) && Number(env.MAX_AUTO_REPLIES) >= 1 ? Number(env.MAX_AUTO_REPLIES) : 15,   // auto-replies per conversation, then a human takes over
 };
+if (env.NO_REPLY_MAX_CHARS && cfg.noReplyMax === 60 && env.NO_REPLY_MAX_CHARS.trim() !== '60') console.log('NO_REPLY_MAX_CHARS is not a whole number of 1 or more: using 60');
 if (env.MAX_AUTO_REPLIES && cfg.maxAutoReplies === 15 && env.MAX_AUTO_REPLIES.trim() !== '15') console.log('MAX_AUTO_REPLIES is not a whole number of 1 or more: using 15');
 const now = Date.now();
 const state = loadState();
@@ -87,6 +90,20 @@ async function handoff(conv, st, ev) {
   if (ev.reason === 'auto-reply-limit') await alert(`auto-reply-limit:${conv.id}`, `Conversation ${conv.id} reached the limit of ${cfg.maxAutoReplies} auto-replies. The customer's new message was handed to a human.`);
 }
 
+// A short comment without a draft needs no answer: resolve it and mark it with no_reply_needed (the other attributes are kept). The state is only
+// marked done once the conversation is really resolved, so a failed PATCH is tried again in the next run.
+async function noReply(conv, st, j) {
+  note('no-reply-needed', conv.id);
+  if (DRY) { log(conv.id, `would resolve (no reply needed, ${kindOf(conv.inbox_id)})`); return; }
+  try { await cl.patch(conv.id, { status: 'resolved' }); }
+  catch (e) { await fail(conv.id, conv.inbox_id, e); return; }
+  st.msgId = j.lastIn.id; st.done = true; st.outcome = 'no-reply'; st.touched = Date.now();
+  event({ id: conv.id, kind: 'no_reply', channel: kindOf(conv.inbox_id) });
+  log(conv.id, 'resolved (no reply needed)');
+  try { await cl.patch(conv.id, { custom_attributes: { ...(conv.custom_attributes || {}), no_reply_needed: true } }); log(conv.id, 'no_reply_needed attribute: ok'); }
+  catch (e) { log(conv.id, `no_reply_needed attribute: failed ${e instanceof ApiError ? e.status : ''}`.trim()); }
+}
+
 async function finish(conv, st) {                                 // after a confirmed send: resolve, mark with auto_sent
   try { await cl.patch(conv.id, { status: 'resolved' }); log(conv.id, 'resolved'); }
   catch (e) { await fail(conv.id, conv.inbox_id, e); }
@@ -116,13 +133,13 @@ async function processConversation(conv) {
   for (const m of msgs) if (m.sender_type) senderTypes.add(`${m.message_type}:${m.sender_type}`);
   if (!st) st = state.convs[conv.id] = { delayMin: newDelay() };     // random delay picked once per cycle
   st.touched = Date.now();
-  let ev = evaluate({ conv, msgs, st, now: Date.now(), delayMin: st.delayMin, cfg });
+  let ev = evaluate({ conv, msgs, st, now: Date.now(), delayMin: st.delayMin, cfg, kind: kindOf(conv.inbox_id) });
   if (ev.action === 'new-cycle') {                                 // the customer wrote again after our auto-reply: a new cycle, exactly like a first message
     st.autoReplies ??= 1;                                          // state from before the counter existed: a sent conversation had at least one
     st.delayMin = newDelay(); st.outcome = undefined; st.done = false; st.reason = undefined;
     note('new-cycle', conv.id); event({ id: conv.id, kind: 'replied_again', channel: kindOf(conv.inbox_id) });
     log(conv.id, `customer wrote again after the auto-reply: new cycle (${st.autoReplies} of ${cfg.maxAutoReplies} auto-replies used)`);
-    ev = evaluate({ conv, msgs, st, now: Date.now(), delayMin: st.delayMin, cfg });
+    ev = evaluate({ conv, msgs, st, now: Date.now(), delayMin: st.delayMin, cfg, kind: kindOf(conv.inbox_id) });
   }
   st.seenActivity = conv.last_activity_at;
   if (ev.lastIn && st.msgId !== ev.lastIn.id) { st.done = false; st.attempts = 0; st.sentHash = undefined; st.waitUntil = undefined; }   // a new customer message starts a new cycle
@@ -135,8 +152,9 @@ async function processConversation(conv) {
     case 'complete': note('complete', conv.id); if (REAL) { st.outcome = 'sent'; st.done = true; st.autoReplies = (st.autoReplies || 0) + 1; log(conv.id, 'earlier send confirmed'); await finish(conv, st); } return;
     case 'handoff': return handoff(conv, st, ev);
     case 'check-draft': {
-      const j = judgeDraft(await cl.draft(conv.id), ev.lastIn);
+      const j = judgeDraft(await cl.draft(conv.id), ev.lastIn, { kind: kindOf(conv.inbox_id), cfg });
       if (j.action === 'send') return send(conv, st, j);
+      if (j.action === 'no-reply-needed') return noReply(conv, st, j);
       if (j.action === 'handoff') return handoff(conv, st, j);
       note(`skip:${j.reason}`, conv.id); log(conv.id, `skipped (${j.reason})`);
       if (REAL) { st.msgId = j.lastIn.id; st.done = true; st.outcome = 'skipped'; }
@@ -172,7 +190,7 @@ async function dailyReport() {
   if (!ev.length) return;                                          // nothing happened: no message
   const sent = ev.filter((e) => e.kind === 'sent'), n = (k, c) => sent.filter((e) => e.channel === c).length;
   const avg = sent.length ? (sent.reduce((a, e) => a + (e.delayMin || 0), 0) / sent.length).toFixed(1) : '-';
-  await slack(`social-autosend ${y}: auto-sent ${sent.length} (comments ${n('', 'comment')}, Messenger ${n('', 'messenger')}); handed to humans ${ev.filter((e) => e.kind === 'handed').length}; customers who replied again ${ev.filter((e) => e.kind === 'replied_again').length}; average delay ${avg} min; errors ${ev.filter((e) => e.kind === 'error').length}.`);
+  await slack(`social-autosend ${y}: auto-sent ${sent.length} (comments ${n('', 'comment')}, Messenger ${n('', 'messenger')}); handed to humans ${ev.filter((e) => e.kind === 'handed').length}; customers who replied again ${ev.filter((e) => e.kind === 'replied_again').length}; closed as no-reply-needed ${ev.filter((e) => e.kind === 'no_reply').length}; average delay ${avg} min; errors ${ev.filter((e) => e.kind === 'error').length}.`);
 }
 
 async function probe(id) {                                         // manual only: does Commslayer accept the custom_attributes keys?

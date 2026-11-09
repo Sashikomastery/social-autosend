@@ -38,7 +38,8 @@ function humanJoined(real, lastIn, st) {
 // First pass. Returns { action: skip | wait | complete | handoff | check-draft | new-cycle, reason, lastIn, ... }.
 //   new-cycle: the customer wrote again after our auto-reply; the caller re-rolls the delay and calls evaluate again.
 //   st = state entry for this conversation (or undefined), delayMin = its random delay (10-15 min), saved once per conversation.
-export function evaluate({ conv, msgs, st, now, delayMin, cfg }) {
+//   kind = 'comment' | 'messenger' | ... (from INBOX_KINDS): the purchase-word rule only applies to comments.
+export function evaluate({ conv, msgs, st, now, delayMin, cfg, kind }) {
   const real = msgs.filter((m) => !m.private && (m.message_type === 'incoming' || m.message_type === 'outgoing')).sort(byTime);
   const incoming = real.filter((m) => m.message_type === 'incoming');
   const lastIn = incoming.at(-1);
@@ -69,12 +70,22 @@ export function evaluate({ conv, msgs, st, now, delayMin, cfg }) {
 
   if ((conv.labels || []).some((l) => /^ai-handover/i.test(l))) return { action: 'handoff', reason: 'ai-handover', lastIn };
   if (incoming.some((m) => cfg.complaintRe.test(m.content || ''))) return { action: 'handoff', reason: 'complaint-word', lastIn };
+  if (kind === 'comment' && cfg.purchaseRe && incoming.some((m) => cfg.purchaseRe.test(m.content || ''))) return { action: 'handoff', reason: 'purchase-mention', lastIn };   // always, with or without a draft; empty PURCHASE_WORDS never matches
   return { action: 'check-draft', lastIn };
 }
 
 // Second pass, once the draft has been read (draft = null when the conversation has none).
-export function judgeDraft(draft, lastIn) {
-  if (!draft || !String(draft.content || '').trim()) return { action: 'handoff', reason: 'no-draft', lastIn };
+//   opts = { kind, cfg }. A comment without a draft is closed as "no-reply-needed" when the customer's last message is short
+//   (at most cfg.noReplyMax characters, default 60), has no question mark and no complaint word. Anything else without a draft is a handoff.
+const QUESTION = /[?\uFF1F\u00BF]/u;                                 // ? full-width ? and inverted ¿
+export function judgeDraft(draft, lastIn, opts = {}) {
+  if (!draft || !String(draft.content || '').trim()) {
+    if (opts.kind === 'comment') {
+      const text = String(lastIn.content || '').trim(), max = opts.cfg?.noReplyMax ?? 60;
+      if (text && Array.from(text).length <= max && !QUESTION.test(text) && !opts.cfg?.complaintRe?.test(text)) return { action: 'no-reply-needed', lastIn };
+    }
+    return { action: 'handoff', reason: 'no-draft', lastIn };
+  }
   if (draft.source !== 'ai') return { action: 'skip', reason: 'human-draft', terminal: true, lastIn };
   const at = Date.parse(draft.updated_at || draft.created_at || '');
   if (!Number.isFinite(at) || at < Date.parse(lastIn.created_at)) return { action: 'handoff', reason: 'draft-older-than-message', lastIn };
