@@ -13,7 +13,6 @@ For every open conversation in the inboxes listed in `INBOX_IDS`:
    - the customer's messages contain a word from `COMPLAINT_WORDS`;
    - a label starting with `ai-handover` is present;
    - (comments only) a customer message contains a word from `PURCHASE_WORDS`: reason `purchase-mention`, always, with or without a draft, and the draft is not sent. If the variable is empty this never happens. Messenger conversations ignore this list;
-   - the customer wrote 3 or more messages in a row without a reply;
    - there is no draft, the draft is empty, or it is older than the customer's message (reason `no-draft`), except for the short comments described below.
 3. Leaves the conversation alone (no handoff) when someone already replied, when a person wrote the draft, or when the customer's message is older than 24 hours (`MAX_AGE_HOURS`).
 4. Otherwise it sends the draft, marks the conversation with the attribute `auto_sent: true`, and resolves it.
